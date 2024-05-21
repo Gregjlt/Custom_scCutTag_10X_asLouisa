@@ -400,6 +400,70 @@ star_func()
    exec_cmd ${cmd} >> ${log} 2>&1
 }
 
+star_func_Louisa()
+{
+   ## Logs
+   mkdir -p $3
+   local log=$3/mapping_star.log
+   echo -e "Running STAR mapping ..."
+   echo -e "Logs: $log"
+   echo
+
+   odir=$2  
+   prefix=$4
+   out_prefix=${odir}/${prefix}
+   ## input type [SE/PE]
+   inputs=($1)
+   if [[ ${#inputs[@]} -eq 1 ]]; then
+       if [[ ${inputs[0]} =~ \.gz ]]; then
+           cmd_in=" <(gzip -cd ${inputs[0]})"
+       else
+           cmd_in="${inputs[0]}"
+       fi
+  elif [[ ${#inputs[@]} -eq 2 ]]; then
+       if [[ ${inputs[0]} =~ \.gz ]]; then
+           cmd_in="<(gzip -cd ${inputs[0]})"
+       else
+           cmd_in="${inputs[0]}"
+       fi
+       if [[ ${inputs[1]} =~ \.gz ]]; then
+           cmd_in="$cmd_in <(gzip -cd ${inputs[1]})"
+       else
+           cmd_in="$cmd_in ${inputs[1]}"
+       fi
+   fi
+
+   ## sample_id
+   if [ ! -z ${SAMPLE_ID} ]; then
+       cmd_id="--outSAMattrRGline ID:${SAMPLE_ID} PL:ILLUMINA"
+   else
+       cmd_id=""
+   fi
+
+   ## Run Mapping
+   local out=$2
+   mkdir -p ${out}
+   
+   gzip -cd ${inputs[1]} > ${out}/tmp.R2.fastq 
+   gzip -cd ${inputs[0]} > ${out}/tmp.R1.fastq
+
+   cmd="STAR --runMode alignReads --runThreadN ${NB_PROC} --alignEndsType EndToEnd --winAnchorMultimapNmax 1000  --outFilterMultimapNmax 1 --alignIntronMax 1 --peOverlapNbasesMin 10 --alignMatesGapMax 450 --limitGenomeGenerateRAM 25000000000 --readFilesIn ${out}/tmp.R1.fastq ${out}/tmp.R2.fastq --genomeDir ${MAPPING_INDEX_STAR} --outFileNamePrefix ${out}/"
+   exec_cmd ${cmd} > ${log} 2>&1
+   
+   rm ${out}/tmp.R1.fastq ${out}/tmp.R2.fastq
+   #Reconvert to BAM
+   cmd="samtools view -@ ${NB_PROC} -bS ${out}/Aligned.out.sam > ${out_prefix}.bam"
+   exec_cmd ${cmd} >> ${log} 2>&1
+
+	 #Sort
+   cmd="samtools sort -n -@ ${NB_PROC} ${out_prefix}.bam -o ${out_prefix}_nsorted.bam && mv ${out_prefix}_nsorted.bam ${out_prefix}.bam"
+   exec_cmd ${cmd} >> ${log} 2>&1
+
+   ## Clean sam file
+   cmd="rm ${out}/Aligned.out.sam"
+   exec_cmd ${cmd} >> ${log} 2>&1
+}
+
 barcode_index_mapping_func()
 {
 ##Function mappin barcodes from single-cell ChIP-seq data, index by index (3 different indexes) to the reference (forward) indexes 
@@ -600,6 +664,100 @@ add_cellBarcode_func () {
   #Cleaning
   cmd="rm -f ${out_prefix}_unique.bam ${out_prefix}_flagged.sam ${out_prefix}_unique_sorted.sam"
   exec_cmd ${cmd} >> ${log} 2>&1
+}
+
+add_cellBarcode_func_Louisa () {
+## logs
+  local log=$4/add_cellBarcode_func.log 
+  echo -e "Running add_cellBarcode_func..."
+  echo -e "Logs: $log"
+  echo
+  local out=$3
+  local out_prefix=${out}/$(basename $1 | sed -e 's/.bam$//')
+
+  #Remove secondary aligned reads (256 <=> "not primary alignment") & If read is unmapped or multimapped (NH != 1), tag Read with flag "4" <=> "unmapped" & "chr" = '*'
+  # cmd="samtools view -F 256 $1 | awk -v OFS='\t' '{if(\$12==\"NH:i:1\"){print \$0} else{\$2=4;\$3=\"*\";\$4=0;\$6=\"*\";print \$0}}'> ${out_prefix}.sam"
+  
+  cmd="samtools view -F 256 $1 | awk -v OFS='\t' 'NR%2==1{if(\$12==\"NH:i:1\"){mapped=1;print \$0} else{mapped=0;\$2=4;\$3=\"*\";\$4=0;\$6=\"*\";print \$0}} NR%2==0{if(mapped==1){print \$0} else{\$2=4;\$3=\"*\";\$4=0;\$6=\"*\";print \$0} }'> ${out_prefix}.sam"
+  exec_cmd ${cmd} > ${log} 2>&1
+
+  
+  #Remove pair of reads that are both unmapped
+  # cmd="cat ${out_prefix}.sam | awk -v OFS='\t' 'NR%2==1{if(\$3==\"*\"){mapped=0} else{mapped=1} R1=\$0}; NR%2==0{if(\$3==\"*\" && mapped==0){} else {print R1\"\\n\"\$0}}'> ${out_prefix}_1.sam"
+  # exec_cmd ${cmd} > ${log} 2>&1
+  
+  cmd="cat ${out_prefix}.sam | awk -v OFS='\t' 'NR%2==1{print \$0} NR%2==0{if(\$3==\"*\"){\$4=2147483647;print \$0} else{print \$0} }'> ${out_prefix}_2.sam"
+  exec_cmd ${cmd} > ${log} 2>&1
+
+  #If read2 & unmapped -> set R2 position as '2147483647'
+  # cmd="cat ${out_prefix}_1.sam | awk -v OFS='\t' 'NR%2==1{print \$0} NR%2==0{if(\$3==\"*\"){\$4=2147483647;print \$0} else{print \$0} }' > ${out_prefix}_2.sam"
+  # exec_cmd ${cmd} >> ${log} 2>&1
+
+  #If read 1 is unmapped R1 -> set R1 position as '2147483646'
+  # cmd="cat ${out_prefix}_2.sam | awk -v OFS='\t' 'NR%2==0{print \$0} NR%2==1{if(\$3==\"*\"){\$4=2147483646;print \$0} else{print \$0} }' > ${out_prefix}_3.sam"
+  # exec_cmd ${cmd} >> ${log} 2>&1
+ 
+  #Remove comments from the header that produce bugs in the count phase
+  # cmd="samtools view -H $1 | sed '/^@CO/ d' > ${out_prefix}_header.sam"
+  # exec_cmd ${cmd} >> ${log} 2>&1
+  
+  cmd="samtools view -H $1 | sed '/^@CO/ d' > ${out_prefix}_header.sam"
+  exec_cmd ${cmd} >> ${log} 2>&1
+  
+  # cmd="cat ${out_prefix}_3.sam >> ${out_prefix}_header.sam && mv ${out_prefix}_header.sam ${out_prefix}.sam && samtools view -b -@ ${NB_PROC} ${out_prefix}.sam > ${out_prefix}_unique.bam"
+  # exec_cmd ${cmd} >> ${log} 2>&1
+  
+  cmd="cat ${out_prefix}_2.sam >> ${out_prefix}_header.sam && mv ${out_prefix}_header.sam ${out_prefix}.sam && samtools view -b -@ ${NB_PROC} ${out_prefix}.sam > ${out_prefix}_unique.bam"
+  exec_cmd ${cmd} >> ${log} 2>&1
+  
+  # cmd="rm -f ${out_prefix}_*.sam ${out_prefix}.sam"
+  # exec_cmd ${cmd} >> ${log} 2>&1
+  
+   cmd="rm -f ${out_prefix}_*.sam ${out_prefix}.sam"
+  exec_cmd ${cmd} >> ${log} 2>&1
+  
+  # Keeping R1 aligned + R2 start as tag 'XS' (Switch from Paired End Bam to Single End Bam)
+  # cmd="samtools view ${out_prefix}_unique.bam | awk '{OFS = \"\t\" ; if(NR%2==1 && !(\$3==\"*\")) {R1=\$0; R1_mapped=1} else if(NR%2==1){R1=\$10; R1_mapped=0; tagR1Pos=\"XS:i:\"\$4}; if(NR%2==0 && !(R1_mapped==0)){tagR2Seq=\"XD:Z:\"\$10; tagR2Pos=\"XS:i:\"\$4;print R1,tagR2Pos,tagR2Seq} if(NR%2==0 && R1_mapped==0){print \$0,tagR1Pos,\"XD:Z:\"R1 } }' > ${out_prefix}_unique.sam"
+  # exec_cmd ${cmd} >> ${log} 2>&1
+  
+  cmd="samtools view ${out_prefix}_unique.bam | awk '{OFS = \"\t\" ; if(NR%2==1 && !(\$3==\"*\")) {R1=\$0} else if(NR%2==1){R1=0}; if(NR%2==0 && !(R1==0)){tagR2Seq=\"XD:Z:\"\$10; tagR2Pos=\"XS:i:\"\$4;print R1,tagR2Pos,tagR2Seq}}' > ${out_prefix}_unique.sam"
+  exec_cmd ${cmd} >> ${log} 2>&1
+   
+  #Sort and join on read names reads barcoded and reads mapped to genome (barcode as tag 'XB') --> filter out unbarcoded OR unmapped reads
+  # cmd="sort -T ${TMP_DIR} --parallel=${NB_PROC} -k1,1 ${out_prefix}_unique.sam > ${out_prefix}_unique_sorted.sam"
+  # exec_cmd ${cmd} >> ${log} 2>&1
+  
+  cmd="sort -T ${TMP_DIR} --parallel=${NB_PROC} -k1,1 ${out_prefix}_unique.sam > ${out_prefix}_unique_sorted.sam"
+  exec_cmd ${cmd} >> ${log} 2>&1
+  
+  # cmd="join -1 1  -2 1  ${out_prefix}_unique_sorted.sam <(awk -v OFS=\"\t\" '{print \$1,\"XB:Z:\"\$2}' $2) > ${out_prefix}_flagged.sam"
+  # exec_cmd ${cmd} >> ${log} 2>&1
+  
+  cmd="join -1 1  -2 1  ${out_prefix}_unique_sorted.sam <(awk -v OFS=\"\t\" '{print \$1,\"XB:Z:\"\$2}' $2) > ${out_prefix}_flagged.sam"
+  exec_cmd ${cmd} >> ${log} 2>&1
+  
+  # cmd="sed -i 's/ /\t/g' ${out_prefix}_flagged.sam"
+  # exec_cmd ${cmd} >> ${log} 2>&1
+  
+  cmd="sed -i 's/ /\t/g' ${out_prefix}_flagged.sam"
+  exec_cmd ${cmd} >> ${log} 2>&1
+  
+  #Remove comments from the header that produce bugs in the count phase
+  # cmd="samtools view -H ${out_prefix}_unique.bam | sed '/^@CO/ d' > ${out_prefix}_header.sam"
+  # exec_cmd ${cmd} >> ${log} 2>&1
+  
+   cmd="samtools view -H ${out_prefix}_unique.bam | sed '/^@CO/ d' > ${out_prefix}_header.sam"
+  exec_cmd ${cmd} >> ${log} 2>&1
+  
+  # cmd="cat ${out_prefix}_flagged.sam >> ${out_prefix}_header.sam && mv ${out_prefix}_header.sam ${out_prefix}_flagged.sam && samtools view -@ ${NB_PROC} -b ${out_prefix}_flagged.sam > ${out_prefix}_flagged.bam"
+  # exec_cmd ${cmd} >> ${log} 2>&1
+  
+   cmd="cat ${out_prefix}_flagged.sam >> ${out_prefix}_header.sam && mv ${out_prefix}_header.sam ${out_prefix}_flagged.sam && samtools view -@ ${NB_PROC} -b ${out_prefix}_flagged.sam > ${out_prefix}_flagged.bam"
+  exec_cmd ${cmd} >> ${log} 2>&1
+  
+  #Cleaning
+  # cmd="rm -f ${out_prefix}_unique.bam ${out_prefix}_flagged.sam ${out_prefix}_unique_sorted.sam"
+  # exec_cmd ${cmd} >> ${log} 2>&1
 }
 
 ##remove_PCR_RT_duplicates_func (Sort and remove consecutive reads if identified as #PCR or #RT)

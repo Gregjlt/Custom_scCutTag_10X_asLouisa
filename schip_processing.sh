@@ -312,7 +312,7 @@ echo "Running pipeline for sample $NAME"
     if [[  -n "${TO_RUN[Mapping]}" ]]; then
 
       echo -e "Mapping using $MAPPER... \n"
-      star_func "$(echo ${PAIRED_END[@]})" ${ODIR}/mapping/genome ${LOGDIR}/genome ${PREFIX}
+      star_func_Louisa "$(echo ${PAIRED_END[@]})" ${ODIR}/mapping/genome ${LOGDIR}/genome ${PREFIX}
 
       if [[  $STRINGENT_MULTIMAP == "TRUE" ]]; then
         #Bowtie mapping to remove multimappers & filtering 
@@ -325,7 +325,7 @@ echo "Running pipeline for sample $NAME"
     ## 4- Add cellular Barcode  - (STAR)
     if [[  -n "${TO_RUN[Filtering]}" ]]; then
       echo -e "Filtering... \n"
-      add_cellBarcode_func ${GENOME_BAM} ${BARCODE_READS} ${ODIR}/mapping ${LOGDIR}
+      add_cellBarcode_func_Louisa ${GENOME_BAM} ${BARCODE_READS} ${ODIR}/mapping ${LOGDIR}
       GENOME_BAM_FLAGGED=${ODIR}/mapping/${PREFIX}_flagged.bam
       
       ## 5- Remove PCR and Reverse Transcription duplicate  - (STAR)
